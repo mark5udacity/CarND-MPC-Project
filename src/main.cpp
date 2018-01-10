@@ -16,6 +16,8 @@ static const int WEBSOCKECT_OK_DISCONNECT_CODE = 1000;
 static const string RESET_SIMULATOR_WS_MESSAGE = "42[\"reset\", {}]";
 static const string MANUAL_WS_MESSAGE = "42[\"manual\",{}]";
 
+static const int NUM_WAYPOINTS = 6; // From observed telemetry data
+
 // For converting back and forth between radians and degrees.
 constexpr double pi() { return M_PI; }
 
@@ -24,7 +26,7 @@ double deg2rad(double x) { return x * pi() / 180; }
 double rad2deg(double x) { return x * 180 / pi(); }
 
 // More helper funcs, declare them after main loop to maybe clean things up!
-json process_telemetry_data(json reference);
+json process_telemetry_data(json reference, MPC mpc);
 string hasData(string s);
 double polyeval(Eigen::VectorXd coeffs, double x);
 Eigen::VectorXd polyfit(Eigen::VectorXd xvals, Eigen::VectorXd yvals, int order);
@@ -61,7 +63,7 @@ int main() {
                         justSwitchedToManual = true;
                     }
 
-                    json msgJson = process_telemetry_data(j[1]); // j[1] is the data JSON object
+                    json msgJson = process_telemetry_data(j[1], mpc); // j[1] is the data JSON object
 
                     auto msg = "42[\"steer\"," + msgJson.dump() + "]";
                     cout << msg << endl;
@@ -127,8 +129,7 @@ int main() {
             cout << "Unexpected Disconnect with code: " << code << "!" << endl;
         }
 
-        cout << "WARN: Not closing WS because we get bad access exception! (Which one cannot catch in C++!?)"
-                  << endl;
+        cout << "WARN: Not closing WS because we get bad access exception! (Which one cannot catch in C++!?)" << endl;
         // StackOverflow https://stackoverflow.com/q/19304157 suggested that error code 1006 means to check onError
         // But, but, but, adding onError here doesn't get called at all, everything seems alright
         // (other than this ws.close() exc_bad_access)
@@ -184,7 +185,7 @@ int main() {
     h.run();
 }
 
-json process_telemetry_data(json jsonData) {
+json process_telemetry_data(json jsonData, MPC mpc) {
     vector<double> ptsx = jsonData["ptsx"];
     vector<double> ptsy = jsonData["ptsy"];
     double px = jsonData["x"];
@@ -192,37 +193,69 @@ json process_telemetry_data(json jsonData) {
     double psi = jsonData["psi"];
     double v = jsonData["speed"];
 
-    /*
-    * TODO: Calculate steering angle and throttle using MPC.
-    *
-    * Both are in between [-1, 1].
-    *
-    */
-    double steer_value;
-    double throttle_value;
+    assert(ptsx.size() == NUM_WAYPOINTS);
+
+    for (int i = 0; i < ptsx.size(); ++i) {
+        // Shift car reference angle to 90 degrees
+        const double shift_x = ptsx[i] - px;
+        const double shift_y = ptsy[i] - py;
+
+        const double rPsi = 0 - psi; // rotated psi
+        ptsx[i] = shift_x * cos(rPsi) - shift_y * sin(rPsi);
+        ptsy[i] = shift_x * sin(rPsi) + shift_y * cos(rPsi);
+    }
+
+
+    Eigen::Map<Eigen::VectorXd> ptsx_transform(&ptsx[0], NUM_WAYPOINTS);
+    Eigen::Map<Eigen::VectorXd> ptsy_transform(&ptsy[0], NUM_WAYPOINTS);
+
+    auto coeffs = polyfit(ptsx_transform, ptsy_transform, 3);
+
+    const double cte = polyeval(coeffs, 0);
+    const double epsi = -atan(coeffs[1]);
+
+    double steer_value = jsonData["steering_angle"];
+    double throttle_value = jsonData["throttle"];
+    // ^^ HINT: Could try to estimate above elements due to delay ^^
+
+    Eigen::VectorXd state(NUM_WAYPOINTS);
+    state << 0, 0, 0, v, cte, epsi;
+
+    auto vars = mpc.Solve(state, coeffs);
 
     json msgJson;
-    // NOTE: Remember to divide by deg2rad(25) before you send the steering value back.
-    // Otherwise the values will be in between [-deg2rad(25), deg2rad(25] instead of [-1, 1].
+    steer_value = vars[0] / (deg2rad(25) * Lf);
+    throttle_value = vars[1];
+
     msgJson["steering_angle"] = steer_value;
     msgJson["throttle"] = throttle_value;
 
     //Display the MPC predicted trajectory
     vector<double> mpc_x_vals;
     vector<double> mpc_y_vals;
+    for (int i = 2; i < vars.size(); ++i) {
+        if (i % 2 == 0) {
+            mpc_x_vals.push_back(vars[i]);
+        } else {
+            mpc_y_vals.push_back(vars[i]);
+        }
+    }
 
     //.. add (x,y) points to list here, points are in reference to the vehicle's coordinate system
     // the points in the simulator are connected by a Green line
-
     msgJson["mpc_x"] = mpc_x_vals;
     msgJson["mpc_y"] = mpc_y_vals;
 
     //Display the waypoints/reference line
     vector<double> next_x_vals;
     vector<double> next_y_vals;
-
-    //.. add (x,y) points to list here, points are in reference to the vehicle's coordinate system
-    // the points in the simulator are connected by a Yellow line
+    double poly_inc = 2.5;
+    int num_points = 25;
+    for (int i = 0; i < num_points; ++i) {
+        double xToEval = poly_inc * i;
+        next_x_vals.push_back(xToEval);
+        next_y_vals.push_back(polyeval(coeffs, xToEval));
+    }
 
     msgJson["next_x"] = next_x_vals;
     msgJson["next_y"] = next_y_vals;
