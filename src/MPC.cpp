@@ -17,8 +17,8 @@ double dt = .1;
 double ref_cte = 0;
 double ref_epsi = 0;
 
-// The reference velocity is set to 40 mph.
-double ref_v = 20; // TODO: play with this for MPH
+// The reference velocity; in MPH.
+double ref_v = 16;
 
 // The solver takes all the state variables and actuator
 // variables in a singular vector. Thus, we should to establish
@@ -184,8 +184,9 @@ vector<double> MPC::Solve(Eigen::VectorXd state, Eigen::VectorXd coeffs) {
     // The upper and lower limits of delta are set to -25 and 25
     // degrees (values in radians).
     for (int i = delta_start; i < accel_start; i++) {
-        vars_lowerbound[i] = -0.436332; // TODO: Should *Lf actually be incorporated here?
-        vars_upperbound[i] = 0.436332;
+        // NOTE: Still not sure if *Lf should be included or not...
+        vars_lowerbound[i] = -0.436332 * Lf;
+        vars_upperbound[i] = 0.436332 * Lf;
     }
 
     // Acceleration/decceleration upper and lower limits.
