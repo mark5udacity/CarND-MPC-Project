@@ -227,7 +227,7 @@ json process_telemetry_data(json jsonData, MPC mpc) {
     steer_value = vars[0] / (deg2rad(25) * Lf);
     throttle_value = vars[1];
 
-    msgJson["steering_angle"] = steer_value;
+    msgJson["steering_angle"] = -1. * steer_value;
     msgJson["throttle"] = throttle_value;
 
     //Display the MPC predicted trajectory
